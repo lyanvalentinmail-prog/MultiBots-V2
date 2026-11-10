@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { readFile } from 'node:fs/promises';
+import { readFile, rm } from 'node:fs/promises';
 import pino from 'pino';
 import qrcode from 'qrcode-terminal';
 import makeWASocket, {
@@ -20,7 +20,10 @@ const startedAt = Date.now();
 let socket;
 let stopping = false;
 let reconnectTimer;
+let pairingTimer;
 let pairingRequested = false;
+let registrationRecoveryAttempts = 0;
+const authDirectory = path.join(botDirectory, '.session');
 
 const { handleMessage, handleGroupUpdate, loadPlugins } = await import(
   pathToFileURL(path.join(botDirectory, 'lib', 'handler.js')).href
@@ -30,10 +33,11 @@ const { loadSettings } = await import(
 );
 const store = await loadSettings(botDirectory, config);
 const plugins = await loadPlugins(botDirectory);
-console.log(`[${config.name}] ${plugins.size} plugin(s) cargado(s).`);
+console.log(`[${config.name}] ${new Set(plugins.values()).size} comando(s) cargado(s).`);
 
 async function connect() {
-  const { state, saveCreds } = await useMultiFileAuthState(path.join(botDirectory, '.session'));
+  clearTimeout(pairingTimer);
+  const { state, saveCreds } = await useMultiFileAuthState(authDirectory);
   const { version } = await fetchLatestBaileysVersion();
   pairingRequested = false;
 
@@ -49,6 +53,23 @@ async function connect() {
     markOnlineOnConnect: false,
     generateHighQualityLinkPreview: true
   });
+
+  // Baileys necesita que el socket termine de inicializar antes de solicitar
+  // el código. Hacerlo en el primer evento "connecting" puede cerrar la conexión.
+  if (method === 'code' && !state.creds.registered) {
+    pairingTimer = setTimeout(async () => {
+      if (stopping || pairingRequested) return;
+      pairingRequested = true;
+      try {
+        const code = await socket.requestPairingCode(phone);
+        console.log(`\n[${config.name}] CÓDIGO DE VINCULACIÓN: ${code.match(/.{1,4}/g)?.join('-') || code}`);
+        console.log('En WhatsApp: Dispositivos vinculados > Vincular con número de teléfono.\n');
+      } catch (error) {
+        pairingRequested = false;
+        console.error(`[${config.name}] No se pudo obtener el código: ${error.message}. Se reintentará la conexión.`);
+      }
+    }, 3000);
+  }
 
   socket.ev.on('creds.update', saveCreds);
   socket.ev.on('messages.upsert', async ({ messages, type }) => {
@@ -69,27 +90,24 @@ async function connect() {
       qrcode.generate(qr, { small: true });
     }
 
-    if (connection === 'connecting' && method === 'code' && !state.creds.registered && !pairingRequested) {
-      pairingRequested = true;
-      try {
-        const code = await socket.requestPairingCode(phone);
-        console.log(`\n[${config.name}] CÓDIGO DE VINCULACIÓN: ${code}`);
-        console.log('En WhatsApp: Dispositivos vinculados > Vincular con número de teléfono.\n');
-      } catch (error) {
-        pairingRequested = false;
-        console.error(`[${config.name}] No se pudo obtener el código: ${error.message}`);
-      }
-    }
-
     if (connection === 'open') {
+      registrationRecoveryAttempts = 0;
       console.log(`[${config.name}] ✓ WhatsApp conectado. Prefijo: ${config.prefix || '.'}`);
     }
 
     if (connection === 'close') {
+      clearTimeout(pairingTimer);
       const status = lastDisconnect?.error?.output?.statusCode;
       const loggedOut = status === DisconnectReason.loggedOut;
+      if (loggedOut && !state.creds.registered && registrationRecoveryAttempts < 1) {
+        registrationRecoveryAttempts++;
+        console.log(`[${config.name}] Limpiando una vinculación incompleta y reintentando...`);
+        await rm(authDirectory, { recursive: true, force: true });
+        reconnectTimer = setTimeout(() => connect().catch(fatal), 2000);
+        return;
+      }
       if (loggedOut) {
-        console.error(`[${config.name}] Sesión cerrada. Borra .session y vuelve a vincular.`);
+        console.error(`[${config.name}] Sesión cerrada. Ejecuta nuevamente start ${method === 'code' ? '1 code' : '1 qr'}.`);
         process.exitCode = 1;
         stopping = true;
         return;
@@ -112,6 +130,7 @@ function fatal(error) {
 async function shutdown() {
   stopping = true;
   clearTimeout(reconnectTimer);
+  clearTimeout(pairingTimer);
   try {
     socket?.end();
   } catch {}
