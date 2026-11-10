@@ -1,0 +1,7 @@
+{
+  "name": "Universal bot",
+  "description": "Bot de utilidades para WhatsApp",
+  "version": "1.0.0",
+  "prefix": ".",
+  "owners": []
+}

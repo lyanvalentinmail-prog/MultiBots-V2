@@ -1,0 +1,14 @@
+node_modules/
+.env
+*.log
+.DS_Store
+
+# Credenciales y configuración generada en tiempo de ejecución
+Bots/*/.session/
+Bots/*/auth/
+Bots/*/data/settings.json
+Bots/*/data/*.tmp
+
+# Archivos temporales
+tmp/
+*.tmp

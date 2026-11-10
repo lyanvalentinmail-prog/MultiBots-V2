@@ -1,0 +1,23 @@
+{
+  "name": "multibots-v2",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Plataforma multibot para WhatsApp con Baileys y terminal para Termux",
+  "type": "module",
+  "main": "src/index.js",
+  "bin": {
+    "multibots": "src/index.js"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "setup": "npm install"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "7.0.0-rc14",
+    "pino": "^10.4.0",
+    "qrcode-terminal": "^0.12.0"
+  }
+}
